@@ -1,0 +1,68 @@
+# vim: set sts=2 ts=8 sw=2 tw=99 et ft=python:
+# Copyright 2026 ETF2L Contributors, Dave
+#
+# Builds getopt.ext.so for every target architecture, and the unit tests of
+# its core library as a program per architecture. The extension uses no
+# engine or Metamod API, so it is one binary for every game. Compiler
+# settings follow SourceMod's own AMBuildScript for Linux extensions.
+import os
+
+def Normalize(path):
+  return os.path.abspath(os.path.normpath(path))
+
+class ExtensionConfig(object):
+  def __init__(self):
+    sm_path = builder.options.sm_path
+    if not sm_path or not os.path.isdir(sm_path):
+      raise Exception('--sm-path must name the SourceMod folder')
+    self.sm_root = Normalize(sm_path)
+    self.all_targets = []
+    for arch in builder.options.targets.split(','):
+      cxx = builder.DetectCxx(target_arch = arch)
+      self.configure_cxx(cxx)
+      self.all_targets.append(cxx)
+
+  def configure_cxx(self, cxx):
+    if builder.options.opt == '1':
+      cxx.defines += ['NDEBUG']
+      cxx.cflags += ['-O3']
+    if builder.options.debug == '1':
+      cxx.defines += ['DEBUG', '_DEBUG']
+      cxx.cflags += ['-g3']
+    cxx.defines += ['HAVE_STDINT_H', 'GNUC', 'LINUX', '_LINUX', 'POSIX', '_FILE_OFFSET_BITS=64']
+    cxx.cflags += ['-pipe', '-fno-strict-aliasing', '-Wall', '-Werror', '-fvisibility=hidden', '-msse',
+                   '-fno-omit-frame-pointer', '-fPIC']
+    cxx.cxxflags += ['-std=c++17', '-Wno-non-virtual-dtor', '-Wno-overloaded-virtual',
+                     '-fvisibility-inlines-hidden', '-Wno-unused-parameter',
+                     '-Wno-implicit-exception-spec-mismatch']
+    cxx.linkflags += ['-lm', '-static-libstdc++', '-lpthread']
+    cxx.includes += [os.path.join(builder.sourcePath, 'src'), os.path.join(builder.sourcePath, 'src', 'core')]
+
+  # The core library, shared by the extension and its tests: everything
+  # that needs no SourceMod.
+  def core_sources(self):
+    return [os.path.join(builder.sourcePath, 'src', 'core', name) for name in [
+      'help.cpp', 'ownership.cpp', 'parser.cpp', 'result.cpp', 'spec.cpp', 'temporal.cpp', 'text.cpp',
+      'types.cpp']]
+
+  def configure_extension(self, binary):
+    compiler = binary.compiler
+    compiler.cxxincludes += [
+      os.path.join(self.sm_root, 'public'),
+      os.path.join(self.sm_root, 'public', 'extensions'),
+      os.path.join(self.sm_root, 'sourcepawn', 'include'),
+      os.path.join(self.sm_root, 'public', 'amtl', 'amtl'),
+      os.path.join(self.sm_root, 'public', 'amtl'),
+    ]
+    binary.sources += [os.path.join(self.sm_root, 'public', 'smsdk_ext.cpp')]
+    # Only SourceMod's entry point leaves the library.
+    compiler.linkflags += [
+      '-Wl,--exclude-libs,ALL',
+      '-Wl,--version-script=' + os.path.join(builder.sourcePath, 'exports.map'),
+      '-Wl,--no-undefined',
+    ]
+
+Extension = ExtensionConfig()
+
+builder.targets = builder.CloneableList(Extension.all_targets)
+builder.Build(['AMBuilder', 'tests/AMBuilder'], {'Extension': Extension})

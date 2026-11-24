@@ -1,0 +1,18 @@
+# vim: set sts=2 ts=8 sw=2 tw=99 et ft=python:
+# Copyright 2026 ETF2L Contributors, Dave
+#
+# The unit tests of the core library, one program per architecture, without
+# SourceMod.
+import os
+
+project = builder.ProgramProject('getopt-tests')
+project.sources += Extension.core_sources()
+project.sources += [os.path.join(builder.sourcePath, 'tests', name) for name in [
+  'main.cpp', 'text_tests.cpp', 'types_tests.cpp', 'spec_tests.cpp', 'parse_tests.cpp', 'result_tests.cpp',
+  'help_tests.cpp', 'temporal_tests.cpp', 'ownership_tests.cpp']]
+
+for cxx in builder.targets:
+  binary = project.Configure(cxx, 'getopt-tests-' + cxx.target.arch, 'Tests - {}'.format(cxx.target.arch))
+  binary.compiler.includes += [os.path.join(builder.sourcePath, 'tests')]
+
+builder.Add(project)

@@ -1,0 +1,10 @@
+/* Copyright 2026 ETF2L Contributors, Dave
+ *
+ * The only symbol getopt.ext.so exports: SourceMod's entry point. Everything
+ * else, including libstdc++, stays local to the extension. */
+{
+	global:
+		GetSMExtAPI;
+	local:
+		*;
+};

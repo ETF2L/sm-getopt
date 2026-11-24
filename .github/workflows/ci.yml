@@ -1,0 +1,175 @@
+# Copyright 2026 ETF2L Contributors, Dave
+#
+# Builds sm-getopt for Linux (x86 and x86_64) on every push, pull request and
+# manual run: the extension and the unit tests of its core against a pinned
+# SourceMod commit, the tests on both architectures, the check of the
+# binaries' exports and glibc version, and the getopt-sourcemod-types plugin
+# with the spcomp of a pinned SourceMod build. It packs an archive laid out
+# like a game folder. For a pushed v* tag it also publishes it as a GitHub
+# release, after checking that the tag matches SMEXT_CONF_VERSION in
+# extension/src/smsdk_config.h. A separate job checks the SourcePawn files
+# in scripting/ with pawncritic (sourcepawn-tools' SourcePawn Lint action).
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # The SourceMod commit (on 1.12-dev) the extension builds against, pinned
+  # so that a release is reproducible from its tag.
+  SOURCEMOD_COMMIT: 3808e21eb842d8598cc8351a341dcbe661d21b58
+  # The SourceMod build whose spcomp compiles the plugin.
+  SOURCEMOD_DROP: https://sm.alliedmods.net/smdrop/1.12/sourcemod-1.12.0-git7260-linux.tar.gz
+  # The extension's binaries may require at most this glibc version.
+  MAX_GLIBC: '2.35'
+
+jobs:
+  lint:
+    name: Lint (SourcePawn)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run pawncritic
+        uses: davenonymous/sourcepawn-tools@v0
+        with:
+          paths: scripting
+
+  build:
+    name: Build (linux)
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -yq --no-install-recommends clang gcc-multilib g++-multilib curl tzdata
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: getopt
+
+      - name: Checkout SourceMod
+        uses: actions/checkout@v4
+        with:
+          repository: alliedmodders/sourcemod
+          ref: ${{ env.SOURCEMOD_COMMIT }}
+          path: sourcemod
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install AMBuild
+        run: pip install git+https://github.com/alliedmodders/ambuild
+
+      - name: Build
+        run: |
+          export CC=clang CXX=clang++
+          mkdir -p build
+          cd build
+          python ../getopt/extension/configure.py --enable-optimize --targets=x86,x86_64 --sm-path=../sourcemod
+          ambuild
+
+      - name: Run the unit tests
+        run: |
+          for arch in x86 x86_64; do
+            echo "Unit tests for $arch:"
+            "build/tests/getopt-tests-$arch/linux-$arch/getopt-tests-$arch"
+          done
+
+      - name: Check the binaries' exports and glibc version
+        run: |
+          for binary in build/getopt.ext/linux-*/getopt.ext.so; do
+            exported=$(nm -D --defined-only "$binary" | awk '{print $3}' | grep -v '^$' | sort | tr '\n' ' ')
+            if [ "$exported" != "GetSMExtAPI " ]; then
+              echo "::error::$binary exports $exported"
+              exit 1
+            fi
+            needed=$(objdump -T "$binary" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)
+            echo "$binary needs glibc $needed"
+            if [ "$(printf '%s\n%s\n' "$needed" "$MAX_GLIBC" | sort -V | tail -1)" != "$MAX_GLIBC" ]; then
+              echo "::error::$binary needs glibc $needed, more than $MAX_GLIBC"
+              exit 1
+            fi
+          done
+
+      - name: Compile the plugin
+        run: |
+          curl -fsSL -o sourcemod.tar.gz "$SOURCEMOD_DROP"
+          mkdir sm && tar -xzf sourcemod.tar.gz -C sm
+          scripting=sm/addons/sourcemod/scripting
+          "$scripting/spcomp" -i "$scripting/include" -i getopt/scripting/include -E \
+            getopt/scripting/getopt-sourcemod-types.sp -o getopt-sourcemod-types.smx
+
+      - name: Pack
+        run: |
+          label="${GITHUB_REF_NAME}"
+          [[ "$GITHUB_REF" == refs/tags/* ]] || label="${GITHUB_SHA::7}"
+          sm=stage/addons/sourcemod
+          mkdir -p "$sm/extensions/x64" "$sm/plugins" "$sm/scripting/include" "$sm/licenses/getopt"
+          strip --strip-debug -o "$sm/extensions/getopt.ext.so" build/getopt.ext/linux-x86/getopt.ext.so
+          strip --strip-debug -o "$sm/extensions/x64/getopt.ext.so" build/getopt.ext/linux-x86_64/getopt.ext.so
+          cp getopt-sourcemod-types.smx "$sm/plugins/"
+          cp getopt/scripting/getopt-sourcemod-types.sp "$sm/scripting/"
+          cp getopt/scripting/include/getopt.inc getopt/scripting/include/getopt_sourcemod.inc "$sm/scripting/include/"
+          cp getopt/LICENSE.txt getopt/licenses/GPLv2.txt getopt/licenses/GPLv3.txt "$sm/licenses/getopt/"
+          tar -czf "sm-getopt-$label-linux.tar.gz" -C stage addons
+          echo "Contents:"
+          find stage -type f | sort
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: sm-getopt-linux
+          path: sm-getopt-*-linux.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check that the tag matches the extension version
+        run: |
+          tag="$GITHUB_REF_NAME"
+          version=$(sed -n 's/^#define SMEXT_CONF_VERSION *"\(.*\)"$/\1/p' extension/src/smsdk_config.h)
+          if [ "$tag" != "v$version" ]; then
+            echo "::error::Tag $tag does not match version $version in extension/src/smsdk_config.h"
+            exit 1
+          fi
+          echo "Version $version matches tag $tag"
+
+      - name: Download the archive
+        uses: actions/download-artifact@v4
+        with:
+          path: archives
+          name: sm-getopt-linux
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" archives/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag

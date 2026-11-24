@@ -1,0 +1,19 @@
+# Never tracked: Claude's working files, ADRs, deploy scripts and reports
+.claude/
+**/docs/adr/
+HANDOVER.md
+PLAN.md
+depl.sh
+depl.pl
+build.sh
+CONTEXT.md
+extension/compile_flags.txt
+.cache/
+code-review-*.html
+architecture-*.html
+.spcomp-lsp.json
+
+# Test servers and their end-to-end tests
+/server/
+
+dist/

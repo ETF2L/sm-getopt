@@ -5,10 +5,13 @@
 # SourceMod commit, the tests on both architectures, the check of the
 # binaries' exports and glibc version, and the getopt-sourcemod-types plugin
 # with the spcomp of a pinned SourceMod build. It packs an archive laid out
-# like a game folder. For a pushed v* tag it also publishes it as a GitHub
-# release, after checking that the tag matches SMEXT_CONF_VERSION in
-# extension/src/smsdk_config.h. A separate job checks the SourcePawn files
-# in scripting/ with pawncritic (sourcepawn-tools' SourcePawn Lint action).
+# like a game folder, and runs the SourcePawn tests (tests/) against the
+# packed extension and plugin under smrunner (sm-runner's setup and test
+# actions), with both runners. For a pushed v* tag it also publishes the
+# archive as a GitHub release, after checking that the tag matches
+# SMEXT_CONF_VERSION in extension/src/smsdk_config.h. A separate job checks
+# the SourcePawn files in scripting/ and tests/ with pawncritic and pawntidy
+# --check (sourcepawn-tools' SourcePawn Lint action).
 
 name: CI
 
@@ -35,10 +38,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Run pawncritic
+      - name: Run pawncritic and pawntidy
         uses: davenonymous/sourcepawn-tools@v0
         with:
-          paths: scripting
+          paths: |
+            scripting
+            tests
+          tidy: true
 
   build:
     name: Build (linux)
@@ -128,6 +134,32 @@ jobs:
           tar -czf "sm-getopt-$label-linux.tar.gz" -C stage addons
           echo "Contents:"
           find stage -type f | sort
+
+      - name: Set up smrunner
+        uses: davenonymous/sm-runner/setup@v0
+        with:
+          spcomp: true
+
+      - name: Run the SourcePawn tests
+        uses: davenonymous/sm-runner/test@v0
+        with:
+          working-directory: getopt
+          tests: tests/test_getopt.sp
+          plugins: tests/getopt-other.sp
+          include-paths: scripting/include
+          extensions: ${{ github.workspace }}/stage/addons/sourcemod/extensions
+
+      - name: Run the getopt-sourcemod-types plugin's tests
+        uses: davenonymous/sm-runner/test@v0
+        with:
+          working-directory: getopt
+          tests: tests/test_sourcemod_types.sp
+          plugins: ${{ github.workspace }}/stage/addons/sourcemod/plugins/getopt-sourcemod-types.smx
+          include-paths: scripting/include
+          extensions: ${{ github.workspace }}/stage/addons/sourcemod/extensions
+          args: |
+            --maps
+            cp_process_final,koth_viaduct
 
       - name: Upload the archive
         uses: actions/upload-artifact@v4

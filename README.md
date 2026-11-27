@@ -146,7 +146,30 @@ It runs the unit tests of both architectures, checks that the binaries export on
 glibc 2.35, compiles `getopt-sourcemod-types.sp` with the spcomp of a pinned SourceMod build (`SOURCEMOD_DROP`) and
 packs `sm-getopt-<label>-linux.tar.gz`, laid out like a game folder with the files above. For a pushed `v*` tag it
 publishes the archive as a GitHub release of `etf2l/sm-getopt`, after checking the tag against `SMEXT_CONF_VERSION`
-in `extension/src/smsdk_config.h`. A separate job checks `scripting/` with pawncritic.
+in `extension/src/smsdk_config.h`. Before the archive is uploaded, sm-runner's setup and test actions
+(`davenonymous/sm-runner/setup@v0` and `test@v0`) run the SourcePawn tests against the packed extension and plugin with
+both `smrunner` and `smrunner64`; a failing test fails the job, so no release is published. A separate job checks
+`scripting/` and `tests/` with pawncritic and `pawntidy --check`.
+
+The SourcePawn tests run under [sm-runner](https://github.com/davenonymous/sm-runner)'s smrunner, a simulated server:
+
+- `tests/test_getopt.sp`: every native as a plugin calls it: every type and shape, the command line syntax, the
+  outcomes and their output, commands and inherited options, the help, the value pipeline and its callbacks, types of
+  the plugin's own and shared ones, spec errors, errors of the plugin and ownership. `tests/getopt-other.sp` is
+  another plugin with a spec, a result and a shared type of its own.
+- `tests/test_sourcemod_types.sp`: the types of `getopt-sourcemod-types.sp` and the stocks of `getopt_sourcemod.inc`.
+
+smrunner simulates no chat triggers and finds maps by their exact name only, so the chat replies and finding a map by
+the start of its name are not covered. Compile the tests with `scripting/include` and smrunner's `share/include` on
+the include path, then run them against the packed archive's `addons/sourcemod`:
+
+```
+smrunner test test_getopt.smx --extensions <dist>/extensions --plugin getopt-other.smx
+smrunner test test_sourcemod_types.smx --extensions <dist>/extensions \
+    --plugin getopt-sourcemod-types.smx --maps cp_process_final,koth_viaduct
+```
+
+`smrunner` loads the x86 extension, `smrunner64` the x64 one.
 
 The unit tests also build without AMBuild, for quick turns:
 
@@ -162,6 +185,7 @@ g++ -std=c++17 -Wall -Werror -Isrc/core -Itests src/core/*.cpp tests/*.cpp -o /t
 | `extension/src/core/` | The library that does the work, without SourceMod: `text` (words, names, numbers as text), `types` (built-in types, registry), `temporal` (time zones, dates, durations), `spec` (declaration, checks, value pipeline), `parser`, `result` (reading values), `help`, `ownership` (each plugin's types, shared types, which specs check themselves again). |
 | `extension/src/` | The SourceMod layer: handles, plugins as owners, callbacks (`extension`), the natives of specs, types and results. |
 | `extension/tests/` | Unit tests of the core library, one program per architecture. |
+| `tests/` | The SourcePawn tests for smrunner. |
 | `scripting/include/getopt.inc` | The API. |
 | `scripting/getopt-sourcemod-types.sp`, `scripting/include/getopt_sourcemod.inc` | The SourceMod types. |
 | `docs/` | The documentation. |
